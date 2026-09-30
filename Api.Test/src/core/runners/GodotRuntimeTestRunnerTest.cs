@@ -240,6 +240,13 @@ public class GodotRuntimeTestRunnerTest
             _ = CreateTestRunner(1000);
             AssertThat(capture.EntriesOf(LogLevel.Warning).Count).OverrideFailureMessage("16 characters must not warn").IsEqual(0);
         }
+
+        Environment.SetEnvironmentVariable(PIPE_SUFFIX_ENV_VAR, "abcdefghij012345!!");
+        using (var capture = LogCapture.Watch<GodotRuntimeTestRunner>())
+        {
+            _ = CreateTestRunner(1000);
+            AssertThat(capture.EntriesOf(LogLevel.Warning).Count).OverrideFailureMessage("16 usable characters plus unusable ones cut nothing and must not warn").IsEqual(0);
+        }
     }
 
     [TestCase]

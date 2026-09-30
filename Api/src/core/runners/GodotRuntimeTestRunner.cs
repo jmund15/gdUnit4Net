@@ -434,6 +434,9 @@ internal sealed class GodotRuntimeTestRunner : BaseTestRunner
         var sanitized = new StringBuilder(PIPE_SUFFIX_MAX_LENGTH);
         foreach (var character in suffix)
         {
+            if (!char.IsAsciiLetterOrDigit(character) && character is not '_' and not '-')
+                continue;
+
             if (sanitized.Length == PIPE_SUFFIX_MAX_LENGTH)
             {
                 if (warnOnTruncation)
@@ -441,8 +444,7 @@ internal sealed class GodotRuntimeTestRunner : BaseTestRunner
                 break;
             }
 
-            if (char.IsAsciiLetterOrDigit(character) || character is '_' or '-')
-                _ = sanitized.Append(character);
+            _ = sanitized.Append(character);
         }
 
         return sanitized.Length == 0
