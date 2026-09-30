@@ -26,6 +26,12 @@ public class GodotRuntimeTestRunnerTest
     public required string MockGodotBinPath { get; set; }
     public required Mock<IDebuggerFramework> DebuggerFrameworkMock { get; set; }
 
+    private const string SKIP_RECOMPILE_ENV_VAR = "GDUNIT4_SKIP_RECOMPILE";
+    private const string PIPE_SUFFIX_ENV_VAR = "GDUNIT4_PIPE_SUFFIX";
+    private const string SKIP_LINE = "Skipping Godot project recompile (GDUNIT4_SKIP_RECOMPILE=1)";
+
+    private string? savedSkipRecompile;
+    private string? savedPipeSuffix;
 
     /// <summary>
     ///     Set up test environment and create mocks
@@ -33,6 +39,11 @@ public class GodotRuntimeTestRunnerTest
     [Before]
     public void Before()
     {
+        savedSkipRecompile = Environment.GetEnvironmentVariable(SKIP_RECOMPILE_ENV_VAR);
+        savedPipeSuffix = Environment.GetEnvironmentVariable(PIPE_SUFFIX_ENV_VAR);
+        Environment.SetEnvironmentVariable(SKIP_RECOMPILE_ENV_VAR, null);
+        Environment.SetEnvironmentVariable(PIPE_SUFFIX_ENV_VAR, null);
+
         // TODO remove if [TempDirectory] implemented
         TestTempDirectory = Path.Combine(Path.GetTempPath(), "test_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(TestTempDirectory);
@@ -58,6 +69,9 @@ public class GodotRuntimeTestRunnerTest
     [After]
     public void After()
     {
+        Environment.SetEnvironmentVariable(SKIP_RECOMPILE_ENV_VAR, savedSkipRecompile);
+        Environment.SetEnvironmentVariable(PIPE_SUFFIX_ENV_VAR, savedPipeSuffix);
+
         try
         {
             // Clean up temp directory if it wasn't handled by the annotation
@@ -161,6 +175,71 @@ public class GodotRuntimeTestRunnerTest
         // Verify the runner file was cleaned up after timeout
         var runnerPath = Path.Combine(workingDirectory, GodotRuntimeTestRunner.TEMP_TEST_RUNNER_DIR, "GdUnit4TestRunnerScene.cs");
         AssertThat(File.Exists(runnerPath)).OverrideFailureMessage("Runner file should be cleaned up after timeout").IsFalse();
+    }
+
+    /// <summary>
+    ///     GDUNIT4_SKIP_RECOMPILE=1 returns true without launching Godot.
+    /// </summary>
+    [TestCase]
+    public void ReCompileGodotProjectSkippedByEnv()
+    {
+        CreateSuccessScript();
+        Environment.SetEnvironmentVariable(SKIP_RECOMPILE_ENV_VAR, "1");
+        var workingDirectory = Path.Combine(TestTempDirectory!, "working_dir_skip");
+        Directory.CreateDirectory(workingDirectory);
+
+        using var capture = LogCapture.Watch<GodotRuntimeTestRunner>();
+
+        var result = CreateTestRunner(1000).ReCompileGodotProject(workingDirectory, MockGodotBinPath);
+
+        AssertThat(result).OverrideFailureMessage("ReCompileGodotProject should return true when skipped").IsTrue();
+        VerifyLoggerInfo(capture, SKIP_LINE);
+        AssertThat(HasInfo(capture, "Rebuilding Godot Project ...")).OverrideFailureMessage("Godot must not be launched").IsFalse();
+        AssertThat(HasInfo(capture, "Rebuilding Godot Project ends with exit code: 0")).OverrideFailureMessage("Godot must not be launched").IsFalse();
+    }
+
+    /// <summary>
+    ///     Only the exact value 1 skips the recompile.
+    /// </summary>
+    [TestCase]
+    public void ReCompileGodotProjectRunsWhenEnvNotOne()
+    {
+        CreateSuccessScript();
+        Environment.SetEnvironmentVariable(SKIP_RECOMPILE_ENV_VAR, "0");
+        var workingDirectory = Path.Combine(TestTempDirectory!, "working_dir_not_one");
+        Directory.CreateDirectory(workingDirectory);
+
+        using var capture = LogCapture.Watch<GodotRuntimeTestRunner>();
+
+        var result = CreateTestRunner(1000).ReCompileGodotProject(workingDirectory, MockGodotBinPath);
+
+        AssertThat(result).IsTrue();
+        VerifyLoggerInfo(capture, "Rebuilding Godot Project ...");
+        VerifyLoggerInfo(capture, "Rebuilding Godot Project ends with exit code: 0");
+        AssertThat(HasInfo(capture, SKIP_LINE)).OverrideFailureMessage("Skip line must be absent").IsFalse();
+    }
+
+    /// <summary>
+    ///     A pipe suffix cut at the cap is reported; one within the cap is not.
+    /// </summary>
+    [TestCase]
+    public void PipeNameTruncationLogsWarning()
+    {
+        Environment.SetEnvironmentVariable(PIPE_SUFFIX_ENV_VAR, "abcdefghij0123456789");
+        using (var capture = LogCapture.Watch<GodotRuntimeTestRunner>())
+        {
+            _ = CreateTestRunner(1000);
+            AssertThat(capture.EntriesOf(LogLevel.Warning).Any(e => e.Message.Contains("16", StringComparison.Ordinal)))
+                .OverrideFailureMessage(FormatFailure(capture, LogLevel.Warning, "truncation warning naming the cap 16"))
+                .IsTrue();
+        }
+
+        Environment.SetEnvironmentVariable(PIPE_SUFFIX_ENV_VAR, "abcdefghij012345");
+        using (var capture = LogCapture.Watch<GodotRuntimeTestRunner>())
+        {
+            _ = CreateTestRunner(1000);
+            AssertThat(capture.EntriesOf(LogLevel.Warning).Count).OverrideFailureMessage("16 characters must not warn").IsEqual(0);
+        }
     }
 
     [TestCase]
@@ -436,6 +515,9 @@ public class GodotRuntimeTestRunnerTest
                 UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
                 UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
     }
+
+    private static bool HasInfo(LogCapture capture, string text)
+        => capture.EntriesOf(LogLevel.Informational).Any(e => e.Message.Equals(text, StringComparison.Ordinal));
 
     private static void VerifyLoggerInfo(LogCapture capture, string expectedText)
         => AssertThat(capture.EntriesOf(LogLevel.Informational).Any(e => e.Message.Equals(expectedText, StringComparison.Ordinal)))

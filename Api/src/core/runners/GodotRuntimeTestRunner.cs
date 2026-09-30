@@ -41,6 +41,11 @@ internal sealed class GodotRuntimeTestRunner : BaseTestRunner
     /// </summary>
     private const int PIPE_SUFFIX_MAX_LENGTH = 16;
 
+    /// <summary>
+    ///     Environment variable that, when exactly <c>1</c>, makes <see cref="ReCompileGodotProject" /> skip launching Godot.
+    /// </summary>
+    private const string SKIP_RECOMPILE_ENV_VAR = "GDUNIT4_SKIP_RECOMPILE";
+
     private static readonly ITestEngineLogger Logger = LoggerFactory.GetLogger<GodotRuntimeTestRunner>();
     private readonly string pipeName;
 
@@ -55,9 +60,9 @@ internal sealed class GodotRuntimeTestRunner : BaseTestRunner
     /// <param name="debuggerFramework">Framework for debugging support.</param>
     /// <param name="settings">Test engine configuration settings.</param>
     internal GodotRuntimeTestRunner(string assemblyId, IDebuggerFramework debuggerFramework, TestEngineSettings settings)
-        : base(new GodotRuntimeExecutor(BuildPipeName(assemblyId)), settings)
+        : base(new GodotRuntimeExecutor(BuildPipeName(assemblyId, false)), settings)
     {
-        pipeName = BuildPipeName(assemblyId);
+        pipeName = BuildPipeName(assemblyId, true);
         scope = LoggerFactory.Instance.GetScope() ?? new ScopeLogger(Logger, assemblyId);
         this.settings = settings;
         DebuggerFramework = debuggerFramework;
@@ -295,8 +300,24 @@ internal sealed class GodotRuntimeTestRunner : BaseTestRunner
         return isSuccess;
     }
 
+    /// <summary>
+    ///     Rebuilds the Godot project by launching the editor headless.
+    /// </summary>
+    /// <remarks>
+    ///     Returns <c>true</c> without launching Godot when <c>GDUNIT4_SKIP_RECOMPILE</c> is exactly <c>1</c>. Any other
+    ///     value, or an unset variable, keeps the rebuild.
+    /// </remarks>
+    /// <param name="workingDirectory">The Godot project directory.</param>
+    /// <param name="godotBinary">Path to the Godot executable.</param>
+    /// <returns><c>true</c> if the project was rebuilt successfully or the rebuild was skipped.</returns>
     internal bool ReCompileGodotProject(string workingDirectory, string godotBinary)
     {
+        if (Environment.GetEnvironmentVariable(SKIP_RECOMPILE_ENV_VAR) == "1")
+        {
+            Logger.LogInfo("Skipping Godot project recompile (GDUNIT4_SKIP_RECOMPILE=1)");
+            return true;
+        }
+
         using var compileProcess = new Process();
         try
         {
@@ -397,11 +418,14 @@ internal sealed class GodotRuntimeTestRunner : BaseTestRunner
     ///     Scoping the name by assembly prevents collisions between different assemblies running in parallel, but two
     ///     concurrent runs of the <b>same</b> assembly - e.g. from separate checkouts or worktrees of one project - still
     ///     derive the same name. Setting <c>GDUNIT4_PIPE_SUFFIX</c> appends a caller supplied discriminator to close that
-    ///     gap. If the variable is unset, empty or contains no usable characters, the resulting name is unchanged.
+    ///     gap. If the variable is unset, empty or contains no usable characters, the resulting name is unchanged. A suffix
+    ///     longer than <c>PIPE_SUFFIX_MAX_LENGTH</c> usable characters is cut; the cut is reported as a warning when
+    ///     <paramref name="warnOnTruncation" /> is set.
     /// </remarks>
     /// <param name="assemblyId">Assembly identifier the pipe name is scoped to.</param>
+    /// <param name="warnOnTruncation">Set on exactly one of the two calls per runner so the warning is logged once.</param>
     /// <returns>The pipe name used by both the pipe client and the spawned Godot runtime pipe server.</returns>
-    private static string BuildPipeName(string assemblyId)
+    private static string BuildPipeName(string assemblyId, bool warnOnTruncation)
     {
         var suffix = Environment.GetEnvironmentVariable(PIPE_SUFFIX_ENV_VAR);
         if (string.IsNullOrEmpty(suffix))
@@ -411,7 +435,12 @@ internal sealed class GodotRuntimeTestRunner : BaseTestRunner
         foreach (var character in suffix)
         {
             if (sanitized.Length == PIPE_SUFFIX_MAX_LENGTH)
+            {
+                if (warnOnTruncation)
+                    Logger.LogWarning($"{PIPE_SUFFIX_ENV_VAR} is longer than {PIPE_SUFFIX_MAX_LENGTH} usable characters, the pipe name suffix is cut at {PIPE_SUFFIX_MAX_LENGTH}");
                 break;
+            }
+
             if (char.IsAsciiLetterOrDigit(character) || character is '_' or '-')
                 _ = sanitized.Append(character);
         }
