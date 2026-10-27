@@ -46,6 +46,11 @@ internal sealed class GodotRuntimeTestRunner : BaseTestRunner
     /// </summary>
     private const string SKIP_RECOMPILE_ENV_VAR = "GDUNIT4_SKIP_RECOMPILE";
 
+    /// <summary>
+    ///     How long <see cref="VerifyGodotCSharpSupport" /> waits for <c>godot --help</c> to exit; a loaded host can take seconds.
+    /// </summary>
+    private const int VERIFY_PROCESS_TIMEOUT_MS = 30000;
+
     private static readonly ITestEngineLogger Logger = LoggerFactory.GetLogger<GodotRuntimeTestRunner>();
     private readonly string pipeName;
 
@@ -215,7 +220,14 @@ internal sealed class GodotRuntimeTestRunner : BaseTestRunner
             }
 
             godotProcess.BeginOutputReadLine();
-            _ = godotProcess.WaitForExit(500);
+
+            // The exit code is unreadable until the process exits.
+            if (!godotProcess.WaitForExit(VERIFY_PROCESS_TIMEOUT_MS))
+            {
+                Logger.LogError($"Checking Godot C# support: '{godotBinary} --help' did not exit within {VERIFY_PROCESS_TIMEOUT_MS} ms.");
+                return false;
+            }
+
             _ = outputComplete.Wait(2000);
 
             if (!hasCSharpOptions)

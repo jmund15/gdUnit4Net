@@ -265,6 +265,30 @@ public class GodotRuntimeTestRunnerTest
         AssertThat(result).OverrideFailureMessage("VerifyGodotCSharpSupport should succeed").IsTrue();
     }
 
+    [TestCase]
+    public void VerifyGodotCSharpSupport_SlowBinary_WaitsForItsExitCode()
+    {
+        var content = Environment.OSVersion.Platform == PlatformID.Win32NT
+            ? """
+              @echo off
+              echo   --build-solutions
+              ping 127.0.0.1 -n 4 > nul
+              exit 0
+              """
+            : """
+              #!/bin/bash
+              echo '  --build-solutions'
+              sleep 3
+              exit 0
+              """;
+        File.WriteAllText(MockGodotBinPath, content);
+        SetAsExecutable(MockGodotBinPath);
+
+        var result = CreateTestRunner(1000).VerifyGodotCSharpSupport(MockGodotBinPath);
+
+        AssertThat(result).OverrideFailureMessage("a binary slower to exit than the probe's first wait must still verify by its exit code").IsTrue();
+    }
+
     /// <summary>
     ///     Test compilation failure scenario
     /// </summary>
